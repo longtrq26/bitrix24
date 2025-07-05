@@ -2,16 +2,22 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpStatus,
   Logger,
+  Param,
+  ParseIntPipe,
   Post,
+  Put,
   Query,
   Res,
 } from '@nestjs/common';
 import { BitrixService } from './bitrix.service';
 import { ConfigService } from '@nestjs/config';
 import { Response } from 'express';
+import { CreateContactDto } from './dto/create-contact.dto';
+import { UpdateContactDto } from './dto/update-contact.dto';
 
 @Controller('bitrix')
 export class BitrixController {
@@ -190,5 +196,104 @@ export class BitrixController {
       );
       throw error;
     }
+  }
+
+  // Contact Management
+
+  // Lấy danh sách contact
+  @Get('contacts')
+  async getContacts(
+    @Query('memberId') memberId: string,
+    @Query('page', new ParseIntPipe({ optional: true })) page: number = 0,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit: number = 50,
+    @Query('search') search?: string,
+  ) {
+    if (!memberId) {
+      throw new BadRequestException('memberId is required.');
+    }
+    this.logger.log(
+      `Fetching contacts for memberId: ${memberId}, page: ${page}, limit: ${limit}, search: ${search || 'N/A'}`,
+    );
+    return this.bitrixService.getContacts(memberId, page, limit, search);
+  }
+
+  // Lấy chi tiết contact và requisite
+  @Get('contacts/:id') // Use :id for path parameter
+  async getContactDetails(
+    @Param('id') contactId: string,
+    @Query('memberId') memberId: string,
+  ) {
+    if (!memberId) {
+      throw new BadRequestException('memberId is required.');
+    }
+    if (!contactId) {
+      throw new BadRequestException('Contact ID is required.');
+    }
+    this.logger.log(
+      `Fetching details for contact ID: ${contactId}, memberId: ${memberId}`,
+    );
+    return this.bitrixService.getContactDetails(memberId, contactId);
+  }
+
+  // Thêm contact mới
+  @Post('contacts')
+  async createContact(
+    @Query('memberId') memberId: string,
+    @Body() createContactDto: CreateContactDto,
+  ) {
+    if (!memberId) {
+      throw new BadRequestException('memberId is required.');
+    }
+    this.logger.log(
+      `Creating contact for memberId: ${memberId} with data: ${JSON.stringify(createContactDto)}`,
+    );
+    return this.bitrixService.createContact(memberId, createContactDto);
+  }
+
+  // Cập nhật contact
+  @Put('contacts/:id') // Use :id for path parameter
+  async updateContact(
+    @Param('id') contactId: string,
+    @Query('memberId') memberId: string,
+    @Body() updateContactDto: UpdateContactDto,
+  ) {
+    if (!memberId) {
+      throw new BadRequestException('memberId is required.');
+    }
+    if (!contactId) {
+      throw new BadRequestException('Contact ID is required.');
+    }
+    this.logger.log(
+      `Updating contact ID: ${contactId}, memberId: ${memberId} with data: ${JSON.stringify(updateContactDto)}`,
+    );
+    return this.bitrixService.updateContact(
+      memberId,
+      contactId,
+      updateContactDto,
+    );
+  }
+
+  // Xóa contact
+  @Delete('contacts/:id') // Use :id for path parameter
+  async deleteContact(
+    @Param('id') contactId: string,
+    @Query('memberId') memberId: string,
+  ) {
+    if (!memberId) {
+      throw new BadRequestException('memberId is required.');
+    }
+    if (!contactId) {
+      throw new BadRequestException('Contact ID is required.');
+    }
+    this.logger.log(`Deleting contact ID: ${contactId}, memberId: ${memberId}`);
+    return this.bitrixService.deleteContact(memberId, contactId);
+  }
+
+  @Get('requisite-presets')
+  async getRequisitePresets(@Query('memberId') memberId: string) {
+    if (!memberId) {
+      throw new BadRequestException('memberId is required.');
+    }
+    return this.bitrixService.getRequisitePresets(memberId);
   }
 }
