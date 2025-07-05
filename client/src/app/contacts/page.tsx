@@ -1,3 +1,4 @@
+// src/app/contacts/page.tsx
 "use client";
 
 import { Button } from "@/components/ui/button";
@@ -11,15 +12,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useGetContactsQuery } from "@/state/api";
-import { FetchBaseQueryError } from "@reduxjs/toolkit/query/react";
+// CORRECTED IMPORT PATH:
+import { FetchBaseQueryError } from "@reduxjs/toolkit/query/react"; // Keep for type checking
 import Link from "next/link";
 import React, { useState } from "react";
 
 const ContactsPage = () => {
-  const [memberId, setMemberId] = useState("e3b04fcf454a94d025ceb96c93423068"); // Replace with actual memberId management
+  // IMPORTANT: This memberId is currently hardcoded. In a real application,
+  // this should come from your authentication system (e.g., user session, context, etc.).
+  const [memberId, setMemberId] = useState("e3b04fcf454a94d025ceb96c93423068");
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(0);
-  const [limit] = useState(50); // Hardcoded limit for now, can be dynamic
+  const [limit] = useState(50); // Hardcoded limit, can be made dynamic later
 
   // Fetch contacts using RTK Query hook
   const { data, error, isLoading, isFetching, refetch } = useGetContactsQuery(
@@ -35,7 +39,8 @@ const ContactsPage = () => {
 
   // Handle pagination
   const handleNextPage = () => {
-    if (data && (page + 1) * limit < data.total) {
+    // Ensure data and total are available before calculating next page
+    if (data?.total !== undefined && (page + 1) * limit < data.total) {
       setPage((prev) => prev + 1);
     }
   };
@@ -44,12 +49,15 @@ const ContactsPage = () => {
     setPage((prev) => Math.max(0, prev - 1));
   };
 
+  // --- Render based on loading/error states ---
   if (!memberId) {
     return (
       <div className="container mx-auto p-4">
         <h1 className="text-2xl font-bold mb-4">Contacts</h1>
-        <p>Please provide a member ID to load contacts.</p>
-        {/* In a real app, you'd have a login/auth flow to get this */}
+        <p>
+          Please provide a member ID to load contacts (e.g., through an
+          authentication flow).
+        </p>
       </div>
     );
   }
@@ -110,8 +118,6 @@ const ContactsPage = () => {
           className="max-w-sm"
         />
         <Link href="/contacts/new">
-          {" "}
-          {/* We'll create this page next */}
           <Button>Add New Contact</Button>
         </Link>
       </div>
@@ -157,7 +163,12 @@ const ContactsPage = () => {
                         View
                       </Button>
                     </Link>
-                    {/* We'll add edit/delete actions here later */}
+                    {/* NEW ADDITION: Edit button */}
+                    <Link href={`/contacts/edit/${contact.ID}`}>
+                      <Button variant="outline" size="sm">
+                        Edit
+                      </Button>
+                    </Link>
                   </TableCell>
                 </TableRow>
               ))}
