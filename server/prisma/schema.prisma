@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -18,8 +12,8 @@ model BitrixToken {
   accessToken  String
   refreshToken String
   expiresIn    Int
-  domain       String   @unique // Domain của Bitrix24 portal (e.g., yourcompany.bitrix24.com)
-  memberId     String   @unique // ID duy nhất của thành viên/cổng
+  domain       String   @unique
+  memberId     String   @unique
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }

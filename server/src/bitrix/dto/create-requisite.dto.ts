@@ -1,15 +1,15 @@
 import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class CreateRequisiteDto {
-  @IsOptional() // Make NAME optional, as it might not always be provided directly in the DTO
+  @IsOptional()
   @IsString()
-  NAME?: string; // Add this line
+  NAME?: string;
 
   @IsNotEmpty()
   @IsString()
-  RQ_BANK_NAME: string; // Tên ngân hàng
+  RQ_BANK_NAME: string;
 
   @IsNotEmpty()
   @IsString()
-  RQ_ACC_NUM: string; // Số tài khoản ngân hàng
+  RQ_ACC_NUM: string;
 }

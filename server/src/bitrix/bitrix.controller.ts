@@ -12,12 +12,15 @@ import {
   Put,
   Query,
   Res,
+  UseGuards,
 } from '@nestjs/common';
-import { BitrixService } from './bitrix.service';
 import { ConfigService } from '@nestjs/config';
 import { Response } from 'express';
+import { MemberId } from 'src/lib/decorators/member-id.decorator';
+import { BitrixService } from './bitrix.service';
 import { CreateContactDto } from './dto/create-contact.dto';
 import { UpdateContactDto } from './dto/update-contact.dto';
+import { BitrixGuard } from './guard/bitrix.guard.ts';
 
 @Controller('bitrix')
 export class BitrixController {
@@ -33,7 +36,6 @@ export class BitrixController {
     @Query('event') event: string,
     @Query('auth_id') authId: string,
     @Query('refresh_id') refreshId: string,
-    @Query('client_endpoint') clientEndpoint: string,
     @Query('domain') domain: string,
     @Query('member_id') memberId: string,
     @Query('expires_in') expiresIn: string,
@@ -46,12 +48,15 @@ export class BitrixController {
 
     try {
       if (code) {
+        // Lấy access token từ code và lưu vào database
         await this.bitrixService.getTokensFromAuthCode(code, domain);
         this.logger.log(
           `Successfully obtained tokens via authorization code for domain: ${domain}`,
         );
-      } else if (event === 'ONAPPINSTALL' && authId && refreshId && domain) {
-        // Ensure 'domain' is present in GET for ONAPPINSTALL as well
+      }
+
+      // không có code nhưng là ONAPPINSTALL event
+      else if (event === 'ONAPPINSTALL' && authId && refreshId && domain) {
         await this.bitrixService.handleInstallApp(
           domain,
           memberId,
@@ -62,21 +67,17 @@ export class BitrixController {
         this.logger.log(
           `Successfully handled ONAPPINSTALL event for domain: ${domain}`,
         );
-      } else {
-        this.logger.warn(
-          'Received install request without necessary parameters (GET).',
-        );
+      }
+
+      // Thiếu cả code và ONAPPINSTALL
+      else {
+        this.logger.warn('Missing required parameters for install GET');
         throw new Error('Invalid install request parameters (GET).');
       }
 
-      res
-        .status(HttpStatus.OK)
-        .send('App installed successfully! You can close this window.');
+      res.status(HttpStatus.OK).send('App installed successfully!');
     } catch (error) {
-      this.logger.error(
-        `Error during GET /bitrix/install: ${error.message}`,
-        error.stack,
-      );
+      this.logger.error(`Install GET error: ${error.message}`, error.stack);
       res
         .status(HttpStatus.INTERNAL_SERVER_ERROR)
         .send(`Error installing app: ${error.message}`);
@@ -85,215 +86,117 @@ export class BitrixController {
 
   @Post('install')
   async installAppPost(@Body() body: any, @Res() res: Response) {
-    this.logger.log(
-      `Install POST event received. Body: ${JSON.stringify(body)}`,
-    );
-
     const { AUTH_ID, REFRESH_ID, AUTH_EXPIRES, member_id, client_endpoint } =
       body;
 
+    this.logger.log(`Install POST event received. member_id: ${member_id}`);
+
     try {
-      if (AUTH_ID && REFRESH_ID && member_id) {
-        let domain: string | undefined;
-
-        // 1. Try to get domain from client_endpoint if available
-        if (client_endpoint) {
-          try {
-            const url = new URL(client_endpoint);
-            domain = url.hostname;
-            this.logger.log(`Domain extracted from client_endpoint: ${domain}`);
-          } catch (urlError) {
-            this.logger.warn(
-              `Failed to parse client_endpoint URL: ${client_endpoint}. Error: ${urlError.message}`,
-            );
-          }
-        }
-
-        // 2. If domain not found from client_endpoint, try to retrieve from DB
-        if (!domain) {
-          const existingToken =
-            await this.bitrixService.getTokenRecord(member_id);
-          if (existingToken?.domain) {
-            domain = existingToken.domain;
-            this.logger.log(
-              `Domain found in DB for member_id: ${member_id} -> ${domain}`,
-            );
-          } else {
-            // 3. Fallback to default domain if nothing else works (e.g., first install where GET flow wasn't used)
-            domain = this.configService.get<string>('BITRIX24_DEFAULT_DOMAIN');
-            if (domain) {
-              this.logger.warn(
-                `Domain not found in body or DB for member_id: ${member_id}. Falling back to default domain: ${domain}`,
-              );
-            } else {
-              this.logger.error(
-                'BITRIX24_DEFAULT_DOMAIN is not configured and domain could not be determined.',
-              );
-              throw new Error(
-                'Bitrix24 domain could not be determined for POST install event.',
-              );
-            }
-          }
-        }
-
-        if (!domain) {
-          // This case should ideally be caught by the previous checks, but as a safeguard
-          throw new Error('Bitrix24 domain could not be determined.');
-        }
-
-        await this.bitrixService.handleInstallApp(
-          domain, // Pass the determined domain
-          member_id,
-          AUTH_ID,
-          REFRESH_ID,
-          parseInt(AUTH_EXPIRES),
-        );
-
-        this.logger.log(
-          `Successfully handled ONAPPINSTALL (POST) for domain: ${domain}`,
-        );
-        return res.status(200).send('App installed successfully! (POST)');
+      // Kiểm tra thông tin cơ bản
+      if (!AUTH_ID || !REFRESH_ID || !member_id) {
+        throw new Error('Missing core fields in POST body.');
       }
 
-      this.logger.warn(
-        'Invalid POST install request parameters (missing core fields).',
+      // Xác định domain
+      let domain: string | undefined;
+
+      // Lấy domain từ client endpoint
+      if (client_endpoint) {
+        try {
+          const url = new URL(client_endpoint);
+          domain = url.hostname;
+        } catch (e) {
+          this.logger.warn(`Invalid client_endpoint URL: ${client_endpoint}`);
+        }
+      }
+
+      // Nếu không có client endpoint, tra cứu trong datbase theo memberId
+      if (!domain) {
+        const token = await this.bitrixService.getTokenRecord(member_id);
+        domain = token?.domain;
+      }
+
+      // Dùng fallback trong .env
+      if (!domain) {
+        domain = this.configService.get<string>('BITRIX24_DEFAULT_DOMAIN');
+      }
+
+      // Không tìm được domain thì báo lỗi
+      if (!domain) {
+        throw new Error('Could not determine Bitrix24 domain.');
+      }
+
+      // Lưu token
+      await this.bitrixService.handleInstallApp(
+        domain,
+        member_id,
+        AUTH_ID,
+        REFRESH_ID,
+        parseInt(AUTH_EXPIRES),
       );
-      throw new Error(
-        'Invalid POST install request parameters (missing core fields).',
-      );
+
+      return res.status(200).send('App installed successfully! (POST)');
     } catch (error) {
-      this.logger.error(
-        `Error during POST /bitrix/install: ${error.message}`,
-        error.stack,
-      );
-      return res.status(500).send(`Error installing app: ${error.message}`);
+      this.logger.error(`Install POST error: ${error.message}`, error.stack);
+      return res
+        .status(HttpStatus.INTERNAL_SERVER_ERROR)
+        .send(`Error installing app: ${error.message}`);
     }
   }
 
-  // ... (rest of your BitrixController code, including test-api and contact management routes) ...
-  @Get('test-api')
-  async testBitrixApi(@Query('memberId') memberId: string) {
-    if (!memberId) {
-      throw new BadRequestException('memberId is required.');
-    }
-    this.logger.log(`Testing Bitrix API for memberId: ${memberId}`);
-    try {
-      // Ví dụ: Lấy 10 contact đầu tiên
-      const contacts = await this.bitrixService.callBitrixApi(
-        memberId,
-        'crm.contact.list',
-        {
-          order: { ID: 'DESC' },
-          select: ['ID', 'NAME', 'EMAIL', 'PHONE'],
-          start: 0,
-        },
-      );
-      return { message: 'Bitrix API call successful!', data: contacts };
-    } catch (error) {
-      this.logger.error(
-        `Failed to call Bitrix API: ${error.message}`,
-        error.stack,
-      );
-      throw error;
-    }
-  }
-
-  // Contact Management
-
-  // Lấy danh sách contact
+  @UseGuards(BitrixGuard)
   @Get('contacts')
   async getContacts(
-    @Query('memberId') memberId: string,
-    @Query('page', new ParseIntPipe({ optional: true })) page: number = 0,
-    @Query('limit', new ParseIntPipe({ optional: true })) limit: number = 50,
+    @MemberId() memberId: string,
+    @Query('page', new ParseIntPipe({ optional: true })) page = 0,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit = 50,
     @Query('search') search?: string,
   ) {
-    if (!memberId) {
-      throw new BadRequestException('memberId is required.');
-    }
-    this.logger.log(
-      `Fetching contacts for memberId: ${memberId}, page: ${page}, limit: ${limit}, search: ${search || 'N/A'}`,
-    );
+    this.logger.log(`Fetching contacts for memberId: ${memberId}`);
     return this.bitrixService.getContacts(memberId, page, limit, search);
   }
 
-  // Lấy chi tiết contact và requisite
-  @Get('contacts/:id') // Use :id for path parameter
+  @UseGuards(BitrixGuard)
+  @Get('contacts/:id')
   async getContactDetails(
+    @MemberId() memberId: string,
     @Param('id') contactId: string,
-    @Query('memberId') memberId: string,
   ) {
-    if (!memberId) {
-      throw new BadRequestException('memberId is required.');
-    }
-    if (!contactId) {
-      throw new BadRequestException('Contact ID is required.');
-    }
-    this.logger.log(
-      `Fetching details for contact ID: ${contactId}, memberId: ${memberId}`,
-    );
+    if (!contactId) throw new BadRequestException('Contact ID is required.');
+    this.logger.log(`Fetching contact ID: ${contactId}`);
     return this.bitrixService.getContactDetails(memberId, contactId);
   }
 
-  // Thêm contact mới
+  @UseGuards(BitrixGuard)
   @Post('contacts')
   async createContact(
-    @Query('memberId') memberId: string,
-    @Body() createContactDto: CreateContactDto,
+    @MemberId() memberId: string,
+    @Body() dto: CreateContactDto,
   ) {
-    if (!memberId) {
-      throw new BadRequestException('memberId is required.');
-    }
-    this.logger.log(
-      `Creating contact for memberId: ${memberId} with data: ${JSON.stringify(createContactDto)}`,
-    );
-    return this.bitrixService.createContact(memberId, createContactDto);
+    this.logger.log(`Creating contact for memberId: ${memberId}`);
+    return this.bitrixService.createContact(memberId, dto);
   }
 
-  // Cập nhật contact
-  @Put('contacts/:id') // Use :id for path parameter
+  @UseGuards(BitrixGuard)
+  @Put('contacts/:id')
   async updateContact(
+    @MemberId() memberId: string,
     @Param('id') contactId: string,
-    @Query('memberId') memberId: string,
-    @Body() updateContactDto: UpdateContactDto,
+    @Body() dto: UpdateContactDto,
   ) {
-    if (!memberId) {
-      throw new BadRequestException('memberId is required.');
-    }
-    if (!contactId) {
-      throw new BadRequestException('Contact ID is required.');
-    }
-    this.logger.log(
-      `Updating contact ID: ${contactId}, memberId: ${memberId} with data: ${JSON.stringify(updateContactDto)}`,
-    );
-    return this.bitrixService.updateContact(
-      memberId,
-      contactId,
-      updateContactDto,
-    );
+    if (!contactId) throw new BadRequestException('Contact ID is required.');
+    this.logger.log(`Updating contact ID: ${contactId}`);
+    return this.bitrixService.updateContact(memberId, contactId, dto);
   }
 
-  // Xóa contact
-  @Delete('contacts/:id') // Use :id for path parameter
+  @UseGuards(BitrixGuard)
+  @Delete('contacts/:id')
   async deleteContact(
+    @MemberId() memberId: string,
     @Param('id') contactId: string,
-    @Query('memberId') memberId: string,
   ) {
-    if (!memberId) {
-      throw new BadRequestException('memberId is required.');
-    }
-    if (!contactId) {
-      throw new BadRequestException('Contact ID is required.');
-    }
-    this.logger.log(`Deleting contact ID: ${contactId}, memberId: ${memberId}`);
+    if (!contactId) throw new BadRequestException('Contact ID is required.');
+    this.logger.log(`Deleting contact ID: ${contactId}`);
     return this.bitrixService.deleteContact(memberId, contactId);
-  }
-
-  @Get('requisite-presets')
-  async getRequisitePresets(@Query('memberId') memberId: string) {
-    if (!memberId) {
-      throw new BadRequestException('memberId is required.');
-    }
-    return this.bitrixService.getRequisitePresets(memberId);
   }
 }

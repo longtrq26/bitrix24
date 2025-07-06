@@ -7,12 +7,14 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import {
+  BANK_REQUISITE_PRESET_ID,
+  ENTITY_TYPE_CONTACT,
+} from 'src/lib/constants';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateContactDto } from './dto/create-contact.dto';
-import { UpdateContactDto } from './dto/update-contact.dto';
 import { CreateRequisiteDto } from './dto/create-requisite.dto';
-
-const BITRIX_BANK_REQUISITE_PRESET_ID = '5';
+import { UpdateContactDto } from './dto/update-contact.dto';
 
 @Injectable()
 export class BitrixService {
@@ -32,6 +34,7 @@ export class BitrixService {
     });
   }
 
+  // Lưu token khi install app từ Bitrix24
   async handleInstallApp(
     domain: string,
     memberId: string,
@@ -42,12 +45,16 @@ export class BitrixService {
     try {
       await this.prisma.bitrixToken.upsert({
         where: { memberId },
+
+        // Nếu đã tồn tại token, cập nhật các fields
         update: {
           accessToken: authId,
           refreshToken,
           expiresIn,
           domain,
         },
+
+        // Nếu chưa có, tạo record mới
         create: {
           accessToken: authId,
           refreshToken,
@@ -64,6 +71,7 @@ export class BitrixService {
     }
   }
 
+  // Đổi authorization code thành tokens
   async getTokensFromAuthCode(code: string, domain: string) {
     const clientId = this.configService.get<string>('BITRIX24_CLIENT_ID');
     const clientSecret = this.configService.get<string>(
@@ -76,16 +84,18 @@ export class BitrixService {
       throw new InternalServerErrorException('Missing Bitrix24 config.');
     }
 
+    // Tạo form data
     const params = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: clientId,
       client_secret: clientSecret,
       code,
       redirect_uri: redirectUri,
-      scope: 'crm,user,entity',
+      scope: 'crm, user, entity',
     });
 
     try {
+      // Gửi request đến endpoint trao đổi token của Bitrix24
       const response = await this.httpClient.post(
         `https://${domain}/oauth/token/`,
         params,
@@ -94,6 +104,7 @@ export class BitrixService {
 
       const data = response.data;
 
+      // Lưu token vào database
       await this.handleInstallApp(
         domain,
         data.member_id,
@@ -109,6 +120,7 @@ export class BitrixService {
     }
   }
 
+  // Refresh token
   async refreshAccessToken(memberId: string): Promise<string> {
     const tokenRecord = await this.getTokenRecord(memberId);
 
@@ -125,6 +137,7 @@ export class BitrixService {
       throw new InternalServerErrorException('Missing Bitrix24 config.');
     }
 
+    // Request data để refresh token
     const params = new URLSearchParams({
       grant_type: 'refresh_token',
       client_id: clientId,
@@ -133,6 +146,7 @@ export class BitrixService {
     });
 
     try {
+      // Gửi request làm mới token đến Bitrix24
       const response = await this.httpClient.post(
         `https://${tokenRecord.domain}/oauth/token/`,
         params,
@@ -141,6 +155,7 @@ export class BitrixService {
 
       const data = response.data;
 
+      // Update tokens trong database
       await this.prisma.bitrixToken.update({
         where: { memberId },
         data: {
@@ -151,6 +166,7 @@ export class BitrixService {
       });
 
       this.logger.log(`Token refreshed for memberId: ${memberId}`);
+
       return data.access_token;
     } catch (error) {
       this.logger.error(`Token refresh failed: ${error.message}`);
@@ -158,6 +174,7 @@ export class BitrixService {
     }
   }
 
+  // Kiểm tra token đã hết hạn chưa
   async getValidAccessToken(
     memberId: string,
   ): Promise<{ accessToken: string; domain: string }> {
@@ -170,14 +187,21 @@ export class BitrixService {
     const now = Date.now() / 1000;
     const issued = token.updatedAt.getTime() / 1000;
 
+    // Nếu token đã hết hạn hoặc sắp hết hạn thì refresh (5p)
     if (now - issued > token.expiresIn - 300) {
       this.logger.warn(
         `Token expired or about to expire for ${memberId}, refreshing...`,
       );
+
+      // Refresh token
       await this.refreshAccessToken(memberId);
+
+      // Lấy lại token vừa refresh
       token = await this.getTokenRecord(memberId);
-      if (!token)
+
+      if (!token) {
         throw new InternalServerErrorException('Token missing after refresh.');
+      }
     }
 
     return {
@@ -186,25 +210,22 @@ export class BitrixService {
     };
   }
 
+  // Gọi API bất kỳ của Bitrix24
   async callBitrixApi(
     memberId: string,
     method: string,
     payload: any = {},
   ): Promise<any> {
+    // Đảm bảo token còn hạn
     const { accessToken, domain } = await this.getValidAccessToken(memberId);
     const apiUrl = `https://${domain}/rest/${method}`;
 
-    this.logger.debug(`Attempting Bitrix API call to: ${apiUrl}`);
-    this.logger.debug(`Payload: ${JSON.stringify(payload)}`);
-    // IMPORTANT: Do NOT log accessToken in production, for debugging only
-    this.logger.debug(
-      `Access Token (first 5 chars): ${accessToken.substring(0, 5)}...`,
-    );
-
     try {
+      // Gửi request đến Bitrix24
       const response = await this.httpClient.post(apiUrl, payload, {
         params: { auth: accessToken },
       });
+
       return response.data;
     } catch (error) {
       const bitrixError = error.response?.data;
@@ -212,15 +233,19 @@ export class BitrixService {
         `Bitrix API error: ${bitrixError?.error || error.message}`,
       );
 
+      // Nếu token hết hạn, tự động refresh và retry
       if (
         bitrixError?.error === 'expired_token' ||
         bitrixError?.error_description === 'The access token has expired.'
       ) {
         try {
           const newToken = await this.refreshAccessToken(memberId);
+
+          // Retry lại với token mới
           const retry = await this.httpClient.post(apiUrl, payload, {
             params: { auth: newToken },
           });
+
           return retry.data;
         } catch (retryError) {
           this.logger.error(
@@ -238,17 +263,18 @@ export class BitrixService {
     }
   }
 
+  // Helper lấy token từ database
   async getTokenRecord(memberId: string) {
     return this.prisma.bitrixToken.findUnique({
       where: { memberId },
     });
   }
 
-  // Contact Management
+  // Lấy danh sách contact
   async getContacts(
     memberId: string,
     page: number = 0,
-    limit: number = 50,
+    limit: number = 10,
     search?: string,
   ): Promise<any> {
     const payload: any = {
@@ -257,7 +283,6 @@ export class BitrixService {
         'ID',
         'NAME',
         'LAST_NAME',
-        'SECOND_NAME',
         'PHONE',
         'EMAIL',
         'WEB',
@@ -269,36 +294,28 @@ export class BitrixService {
       start: page * limit,
     };
 
+    // Xử lý search
     if (search) {
-      // Bitrix24 search is often done via filter
       payload.filter = {
-        '%NAME': search, // Search by name (partial match)
+        LOGIC: 'OR',
+        '%NAME': search,
+        '%LAST_NAME': search,
+        '%EMAIL': search,
+        '%PHONE': search,
       };
-      // You might also want to search by EMAIL, PHONE, etc.
-      // For example, if searching multiple fields:
-      // payload.filter = {
-      //   'LOGIC': 'OR',
-      //   '%NAME': search,
-      //   '%LAST_NAME': search,
-      //   '%EMAIL': search,
-      //   '%PHONE': search,
-      // };
     }
 
-    // Note: Bitrix24 `list` methods don't typically take a `limit` parameter directly
-    // Instead, they have a default page size (usually 50) and a `start` parameter for pagination.
-    // We handle `limit` by setting `start`. If you need more than 50, you'd need to loop or use batch.
-    // For simplicity, we'll stick to a single page for now.
-
     try {
+      // Call api
       const response = await this.callBitrixApi(
         memberId,
         'crm.contact.list',
         payload,
       );
-      // Bitrix returns { result: [], total: N }
+
+      // Lấy 10 dòng cho đẹp
       return {
-        data: response.result,
+        data: response.result.slice(0, limit),
         total: response.total,
         page,
         limit,
@@ -309,8 +326,10 @@ export class BitrixService {
     }
   }
 
+  // Lấy chi tiết một contact
   async getContactDetails(memberId: string, contactId: string): Promise<any> {
     try {
+      // Call api
       const contactResponse = await this.callBitrixApi(
         memberId,
         'crm.contact.get',
@@ -323,47 +342,45 @@ export class BitrixService {
 
       const contact = contactResponse.result;
 
-      // 1. Get a list of requisites for this contact (only ID and PRESET_ID)
+      // Lấy danh sách requisite
       const requisitesListResponse = await this.callBitrixApi(
         memberId,
         'crm.requisite.list',
         {
           order: { ID: 'DESC' },
           filter: {
-            ENTITY_TYPE_ID: 3, // 3 for Contact
+            ENTITY_TYPE_ID: ENTITY_TYPE_CONTACT,
             ENTITY_ID: contactId,
           },
-          select: ['ID', 'PRESET_ID', 'NAME'], // Only select standard fields here
+          select: ['ID', 'PRESET_ID', 'NAME'],
         },
       );
 
       let requisiteDetails: Partial<CreateRequisiteDto> | null = null;
 
-      // If requisites are found, retrieve full details for the first one that matches our preset
+      // Tìm requisite đúng preset ngân hàng
       if (
         requisitesListResponse.result &&
         requisitesListResponse.result.length > 0
       ) {
-        // Find the requisite that uses our specific bank details preset
         const bankRequisiteSummary = requisitesListResponse.result.find(
-          (req: any) => req.PRESET_ID === BITRIX_BANK_REQUISITE_PRESET_ID,
+          // 5 = preset cho bank
+          (req: any) => req.PRESET_ID === BANK_REQUISITE_PRESET_ID,
         );
 
+        // Nếu có requisite đúng preset, call api để lấy details
         if (bankRequisiteSummary) {
-          // 2. Now call crm.requisite.get for the specific requisite ID
-          // This method allows selecting all fields, including custom ones you defined (e.g., RQ_BANK_NAME)
           const fullRequisiteResponse = await this.callBitrixApi(
             memberId,
             'crm.requisite.get',
-            { ID: bankRequisiteSummary.ID }, // Get by its specific ID
+            { ID: bankRequisiteSummary.ID },
           );
 
           if (fullRequisiteResponse.result) {
             requisiteDetails = {
-              NAME: fullRequisiteResponse.result.NAME, // General name of the requisite
-              RQ_BANK_NAME: fullRequisiteResponse.result.RQ_BANK_NAME, // Your custom field
-              RQ_ACC_NUM: fullRequisiteResponse.result.RQ_ACC_NUM, // Your custom field
-              // You can add other fields from the requisite here if needed
+              NAME: fullRequisiteResponse.result.NAME,
+              RQ_BANK_NAME: fullRequisiteResponse.result.RQ_BANK_NAME,
+              RQ_ACC_NUM: fullRequisiteResponse.result.RQ_ACC_NUM,
             };
           }
         }
@@ -378,63 +395,70 @@ export class BitrixService {
     }
   }
 
+  // Tạo mới contact
   async createContact(
     memberId: string,
     createContactDto: CreateContactDto,
   ): Promise<any> {
+    const duplicates = await this.checkDuplicateContact(
+      memberId,
+      createContactDto,
+    );
+
+    if (duplicates.length > 0) {
+      throw new BadRequestException(
+        `Duplicate contact found with IDs: ${duplicates.join(', ')}`,
+      );
+    }
+
     const { requisite, PHONE, EMAIL, WEB, ...contactFields } = createContactDto;
 
-    // Prepare contact fields for Bitrix24
     const fields: any = {
-      // Default type to 'CLIENT' or 'CONTACT' (check your Bitrix24 settings)
-      // It's often set automatically, but can be specified.
-      // 'TYPE_ID': 'CLIENT',
-      OPENED: 'Y', // Make it visible to everyone
+      OPENED: 'Y', // Cho phép mọi người thấy contact này
       ...contactFields,
     };
 
-    // Handle multi-field types like PHONE, EMAIL, WEB
+    // Xử lý các trường multi-field
     if (PHONE) {
-      fields.PHONE = [{ VALUE: PHONE, VALUE_TYPE: 'WORK' }]; // Or 'MOBILE'
+      fields.PHONE = [{ VALUE: PHONE, VALUE_TYPE: 'WORK' }];
     }
     if (EMAIL) {
-      fields.EMAIL = [{ VALUE: EMAIL, VALUE_TYPE: 'WORK' }]; // Or 'HOME'
+      fields.EMAIL = [{ VALUE: EMAIL, VALUE_TYPE: 'WORK' }];
     }
     if (WEB) {
       fields.WEB = [{ VALUE: WEB, VALUE_TYPE: 'WORK' }];
     }
 
     try {
-      // 1. Create the contact
+      // Create contact
       const contactResponse = await this.callBitrixApi(
         memberId,
         'crm.contact.add',
         { fields },
       );
 
+      // Kiểm tra ID trả về
       const contactId = contactResponse.result;
+
       if (!contactId) {
         throw new InternalServerErrorException(
           'Failed to create contact, no ID returned.',
         );
       }
+
       this.logger.log(`Created contact with ID: ${contactId}`);
 
-      // 2. If requisite data exists, create the requisite
+      // Create thông tin bank
       if (requisite) {
         const requisiteFields = {
-          ENTITY_TYPE_ID: 3,
+          ENTITY_TYPE_ID: ENTITY_TYPE_CONTACT,
           ENTITY_ID: contactId,
-          PRESET_ID: BITRIX_BANK_REQUISITE_PRESET_ID,
+          PRESET_ID: BANK_REQUISITE_PRESET_ID,
           NAME: requisite.NAME || 'Bank Details',
-          // Mandatory fields for requisite might include NAME, XML_ID (if custom reqs)
-          // For just banking, ensure RQ_BANK_NAME and RQ_ACC_NUM are supported fields.
-          // You might need to retrieve the default REQUISITE_ID for bank details if Bitrix requires it.
-          // In a real scenario, you'd likely map these to specific requisite preset fields.
-          // For now, assuming direct field names work or you have a general preset.
-          ...requisite, // Directly pass RQ_BANK_NAME, RQ_ACC_NUM
+          ...requisite,
         };
 
+        // Gắn requisite vào contact
         const requisiteResponse = await this.callBitrixApi(
           memberId,
           'crm.requisite.add',
@@ -457,6 +481,7 @@ export class BitrixService {
     }
   }
 
+  // Cập nhật contact
   async updateContact(
     memberId: string,
     contactId: string,
@@ -469,11 +494,9 @@ export class BitrixService {
       ...contactFields,
     };
 
-    // Handle multi-field types like PHONE, EMAIL, WEB for update
-    // For updates, you often need to fetch existing fields first if you want to merge,
-    // or entirely replace them. Here we'll replace if provided.
+    // Xử lý multi-field
     if (PHONE !== undefined) {
-      fields.PHONE = PHONE ? [{ VALUE: PHONE, VALUE_TYPE: 'WORK' }] : []; // Clear if empty string
+      fields.PHONE = PHONE ? [{ VALUE: PHONE, VALUE_TYPE: 'WORK' }] : [];
     }
     if (EMAIL !== undefined) {
       fields.EMAIL = EMAIL ? [{ VALUE: EMAIL, VALUE_TYPE: 'WORK' }] : [];
@@ -483,7 +506,7 @@ export class BitrixService {
     }
 
     try {
-      // 1. Update the contact
+      // Update contact
       const contactResponse = await this.callBitrixApi(
         memberId,
         'crm.contact.update',
@@ -495,16 +518,19 @@ export class BitrixService {
           `Failed to update contact with ID ${contactId}.`,
         );
       }
+
       this.logger.log(`Updated contact with ID: ${contactId}`);
 
-      // 2. Handle requisite update
+      // Xử lý update requisite
       if (requisite !== undefined) {
-        // First, try to find existing requisites for this contact
         const existingRequisitesResponse = await this.callBitrixApi(
           memberId,
           'crm.requisite.list',
           {
-            filter: { ENTITY_TYPE_ID: 3, ENTITY_ID: contactId },
+            filter: {
+              ENTITY_TYPE_ID: ENTITY_TYPE_CONTACT,
+              ENTITY_ID: contactId,
+            },
             select: ['ID'],
           },
         );
@@ -519,11 +545,11 @@ export class BitrixService {
           existingRequisite &&
           (requisite.RQ_BANK_NAME || requisite.RQ_ACC_NUM)
         ) {
-          // Update existing requisite
+          // Có requisite và DTO có data, update
           await this.callBitrixApi(memberId, 'crm.requisite.update', {
             ID: existingRequisite.ID,
             fields: {
-              PRESET_ID: BITRIX_BANK_REQUISITE_PRESET_ID,
+              PRESET_ID: BANK_REQUISITE_PRESET_ID,
               NAME: requisite.NAME || existingRequisite.NAME || 'Bank Details',
               ...requisite,
             },
@@ -533,16 +559,15 @@ export class BitrixService {
           !existingRequisite &&
           (requisite.RQ_BANK_NAME || requisite.RQ_ACC_NUM)
         ) {
-          // No existing requisite, but new data provided -> create new
-          const newRequisiteFields = {
-            ENTITY_TYPE_ID: 3,
-            ENTITY_ID: contactId,
-            PRESET_ID: BITRIX_BANK_REQUISITE_PRESET_ID,
-            NAME: requisite.NAME || 'Bank Details',
-            ...requisite,
-          };
+          // Không có requisite nhưng DTO có data, create
           await this.callBitrixApi(memberId, 'crm.requisite.add', {
-            fields: newRequisiteFields,
+            fields: {
+              ENTITY_TYPE_ID: ENTITY_TYPE_CONTACT,
+              ENTITY_ID: contactId,
+              PRESET_ID: BANK_REQUISITE_PRESET_ID,
+              NAME: requisite.NAME || 'Bank Details',
+              ...requisite,
+            },
           });
           this.logger.log(`Created new requisite for contact ID: ${contactId}`);
         } else if (
@@ -550,7 +575,7 @@ export class BitrixService {
           !requisite.RQ_BANK_NAME &&
           !requisite.RQ_ACC_NUM
         ) {
-          // Requisite exists but DTO has empty/undefined requisite fields, consider deleting it
+          // Có requisite nhưng DTO không có data, delete
           await this.callBitrixApi(memberId, 'crm.requisite.delete', {
             ID: existingRequisite.ID,
           });
@@ -565,33 +590,41 @@ export class BitrixService {
     }
   }
 
+  // Xoá một contact
   async deleteContact(memberId: string, contactId: string): Promise<any> {
     try {
-      // Before deleting the contact, it's good practice to delete associated requisites.
-      // Bitrix24 might handle this automatically, but explicit deletion is safer.
-      const existingRequisitesResponse = await this.callBitrixApi(
+      // Tìm requisite liên quan trước khi xoá
+      const { result: requisites = [] } = await this.callBitrixApi(
         memberId,
         'crm.requisite.list',
         {
-          filter: { ENTITY_TYPE_ID: 3, ENTITY_ID: contactId },
+          filter: { ENTITY_TYPE_ID: ENTITY_TYPE_CONTACT, ENTITY_ID: contactId },
           select: ['ID'],
         },
       );
 
-      if (
-        existingRequisitesResponse.result &&
-        existingRequisitesResponse.result.length > 0
-      ) {
-        for (const req of existingRequisitesResponse.result) {
-          await this.callBitrixApi(memberId, 'crm.requisite.delete', {
-            ID: req.ID,
-          });
-          this.logger.log(
-            `Deleted requisite ID ${req.ID} for contact ID: ${contactId}`,
-          );
-        }
+      // Xoá tất cả requisite nếu có
+      if (requisites.length > 0) {
+        await Promise.all(
+          requisites.map((req: any) =>
+            this.callBitrixApi(memberId, 'crm.requisite.delete', {
+              ID: req.ID,
+            })
+              .then(() =>
+                this.logger.log(
+                  `Deleted requisite ID ${req.ID} for contact ID: ${contactId}`,
+                ),
+              )
+              .catch((err) =>
+                this.logger.warn(
+                  `Failed to delete requisite ID ${req.ID}: ${err.message}`,
+                ),
+              ),
+          ),
+        );
       }
 
+      // Delete contact
       const response = await this.callBitrixApi(
         memberId,
         'crm.contact.delete',
@@ -603,7 +636,9 @@ export class BitrixService {
           `Failed to delete contact with ID ${contactId}.`,
         );
       }
+
       this.logger.log(`Deleted contact with ID: ${contactId}`);
+
       return { message: 'Contact deleted successfully.' };
     } catch (error) {
       this.logger.error(`Failed to delete contact: ${error.message}`);
@@ -611,18 +646,43 @@ export class BitrixService {
     }
   }
 
-  async getRequisitePresets(memberId: string): Promise<any> {
-    try {
-      this.logger.log(`Fetching requisite presets for memberId: ${memberId}`);
-      const response = await this.callBitrixApi(
-        memberId,
-        'crm.requisite.preset.list',
-        {},
+  // Helper kiểm tra contact trùng
+  private async checkDuplicateContact(
+    memberId: string,
+    dto: CreateContactDto,
+  ): Promise<string[]> {
+    const { PHONE, EMAIL } = dto;
+    const duplicates: Set<string> = new Set();
+
+    const tasks: Promise<void>[] = [];
+
+    // Phone trùng
+    if (PHONE) {
+      tasks.push(
+        this.callBitrixApi(memberId, 'crm.duplicate.findbycomm', {
+          type: 'PHONE',
+          values: [PHONE],
+          entity_type: 'CONTACT',
+        }).then((res) => {
+          res.result?.CONTACT?.forEach((id: string) => duplicates.add(id));
+        }),
       );
-      return response.result;
-    } catch (error) {
-      this.logger.error(`Failed to fetch requisite presets: ${error.message}`);
-      throw error;
     }
+
+    // Email trùng
+    if (EMAIL) {
+      tasks.push(
+        this.callBitrixApi(memberId, 'crm.duplicate.findbycomm', {
+          type: 'EMAIL',
+          values: [EMAIL],
+          entity_type: 'CONTACT',
+        }).then((res) => {
+          res.result?.CONTACT?.forEach((id: string) => duplicates.add(id));
+        }),
+      );
+    }
+
+    await Promise.all(tasks);
+    return [...duplicates];
   }
 }

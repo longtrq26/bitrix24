@@ -20,10 +20,6 @@ export class UpdateContactDto {
 
   @IsOptional()
   @IsString()
-  SECOND_NAME?: string;
-
-  @IsOptional()
-  @IsString()
   ADDRESS_1?: string;
 
   @IsOptional()

@@ -1,46 +1,42 @@
+import { Type } from 'class-transformer';
 import {
-  IsString,
   IsEmail,
+  IsNotEmpty,
   IsOptional,
   IsPhoneNumber,
+  IsString,
   IsUrl,
   ValidateNested,
-  IsNotEmpty,
 } from 'class-validator';
-import { Type } from 'class-transformer';
 import { CreateRequisiteDto } from './create-requisite.dto';
 
 export class CreateContactDto {
   @IsNotEmpty()
   @IsString()
-  NAME: string; // Tên contact (first name)
+  NAME: string;
 
   @IsOptional()
   @IsString()
-  LAST_NAME?: string; // Tên contact (last name - Bitrix convention)
+  LAST_NAME?: string;
 
   @IsOptional()
   @IsString()
-  SECOND_NAME?: string; // Tên đệm (middle name - Bitrix convention)
+  ADDRESS_1?: string;
 
   @IsOptional()
   @IsString()
-  ADDRESS_1?: string; // Địa chỉ - đường/số nhà
+  ADDRESS_CITY?: string;
 
   @IsOptional()
   @IsString()
-  ADDRESS_CITY?: string; // Tỉnh/Thành phố
+  ADDRESS_REGION?: string;
 
   @IsOptional()
   @IsString()
-  ADDRESS_REGION?: string; // Quận/Huyện
+  ADDRESS_PROVINCE?: string;
 
   @IsOptional()
-  @IsString()
-  ADDRESS_PROVINCE?: string; // Phường/Xã (often mapped to Province in Bitrix for finer grain)
-
-  @IsOptional()
-  @IsPhoneNumber('VN', { message: 'Must be a valid Vietnamese phone number.' }) // Adjust 'VN' if different country
+  @IsPhoneNumber('VN', { message: 'Must be a valid Vietnamese phone number.' })
   PHONE?: string;
 
   @IsOptional()
@@ -54,5 +50,5 @@ export class CreateContactDto {
   @IsOptional()
   @ValidateNested()
   @Type(() => CreateRequisiteDto)
-  requisite?: CreateRequisiteDto; // Thông tin ngân hàng
+  requisite?: CreateRequisiteDto;
 }

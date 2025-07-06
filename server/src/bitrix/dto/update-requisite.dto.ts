@@ -7,9 +7,9 @@ export class UpdateRequisiteDto {
 
   @IsOptional()
   @IsString()
-  RQ_BANK_NAME?: string; // Tên ngân hàng
+  RQ_BANK_NAME?: string;
 
   @IsOptional()
   @IsString()
-  RQ_ACC_NUM?: string; // Số tài khoản ngân hàng
+  RQ_ACC_NUM?: string;
 }
