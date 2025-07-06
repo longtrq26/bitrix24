@@ -1,8 +1,8 @@
-// src/app/contacts/page.tsx
 "use client";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -11,72 +11,66 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { DEFAULT_MEMBER_ID } from "@/lib/constants";
 import { useGetContactsQuery } from "@/state/api";
-// CORRECTED IMPORT PATH:
-import { FetchBaseQueryError } from "@reduxjs/toolkit/query/react"; // Keep for type checking
+import { Contact } from "@/types";
+import { FetchBaseQueryError } from "@reduxjs/toolkit/query/react";
+import { Eye, Pencil, Plus } from "lucide-react";
 import Link from "next/link";
-import React, { useState } from "react";
+import React, { ChangeEvent, useState } from "react";
 
 const ContactsPage = () => {
-  // IMPORTANT: This memberId is currently hardcoded. In a real application,
-  // this should come from your authentication system (e.g., user session, context, etc.).
-  const [memberId, setMemberId] = useState("e3b04fcf454a94d025ceb96c93423068");
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(0);
-  const [limit] = useState(50); // Hardcoded limit, can be made dynamic later
+  const [limit] = useState(10);
 
-  // Fetch contacts using RTK Query hook
-  const { data, error, isLoading, isFetching, refetch } = useGetContactsQuery(
-    { memberId, page, limit, search: searchQuery },
-    { skip: !memberId } // Skip fetching if memberId is not set
-  );
+  // Lấy danh sách contact
+  const { data, error, isLoading, isFetching, refetch } = useGetContactsQuery({
+    memberId: DEFAULT_MEMBER_ID,
+    page,
+    limit,
+    search: searchQuery,
+  });
 
-  // Handle search input change
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Xử lý tìm kiếm
+  const handleSearchChange = (e: ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
-    setPage(0); // Reset page to 0 when search query changes
+    setPage(0);
   };
 
-  // Handle pagination
+  // Xử lý phân trang
+  const totalContacts = data?.total || 0;
+  const pagination = {
+    page,
+    totalPages: Math.ceil(totalContacts / limit),
+    canPrev: page > 0,
+    canNext: (page + 1) * limit < totalContacts,
+  };
+
   const handleNextPage = () => {
-    // Ensure data and total are available before calculating next page
-    if (data?.total !== undefined && (page + 1) * limit < data.total) {
-      setPage((prev) => prev + 1);
-    }
+    if (pagination.canNext) setPage((prev) => prev + 1);
   };
 
   const handlePrevPage = () => {
-    setPage((prev) => Math.max(0, prev - 1));
+    if (pagination.canPrev) setPage((prev) => prev - 1);
   };
 
-  // --- Render based on loading/error states ---
-  if (!memberId) {
-    return (
-      <div className="container mx-auto p-4">
-        <h1 className="text-2xl font-bold mb-4">Contacts</h1>
-        <p>
-          Please provide a member ID to load contacts (e.g., through an
-          authentication flow).
-        </p>
-      </div>
-    );
-  }
-
+  // Loading
   if (isLoading && !isFetching) {
-    // Initial load, not refetching
     return (
-      <div className="container mx-auto p-4">
-        <h1 className="text-2xl font-bold mb-4">Contacts</h1>
-        <p>Loading contacts...</p>
+      <div className="container mx-auto p-6">
+        <h1 className="text-3xl font-bold mb-6 text-center">Contacts</h1>
+        <Skeleton className="h-10 w-full mb-4" />
+        <Skeleton className="h-[300px] w-full rounded-md" />
       </div>
     );
   }
 
+  // Error
   if (error) {
     let errorMessage = "An unknown error occurred";
 
     if ("status" in error) {
-      // This is a FetchBaseQueryError
       const fetchError = error as FetchBaseQueryError;
       if (typeof fetchError.data === "string") {
         errorMessage = fetchError.data;
@@ -89,49 +83,54 @@ const ContactsPage = () => {
           (fetchError.data as { message?: string }).message || errorMessage;
       }
     } else if ("message" in error) {
-      // This is a SerializedError
       errorMessage = error.message as string;
     }
 
     return (
-      <div className="container mx-auto p-4">
-        <h1 className="text-2xl font-bold mb-4">Contacts</h1>
-        <p className="text-red-500">Error loading contacts: {errorMessage}</p>
+      <div className="container mx-auto p-6 text-center">
+        <h1 className="text-3xl font-bold mb-4">Contacts</h1>
+        <p className="text-red-500 mb-2">
+          Failed to load contacts: {errorMessage}
+        </p>
         <Button onClick={() => refetch()}>Retry</Button>
       </div>
     );
   }
 
   const contacts = data?.data || [];
-  const totalContacts = data?.total || 0;
 
   return (
-    <div className="container mx-auto p-4">
+    <div className="container mx-auto p-6">
       <h1 className="text-3xl font-bold mb-6 text-center">Bitrix24 Contacts</h1>
 
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex flex-col md:flex-row justify-between gap-3 mb-4">
         <Input
           type="text"
           placeholder="Search contacts by name..."
           value={searchQuery}
           onChange={handleSearchChange}
-          className="max-w-sm"
+          className="max-w-md"
         />
         <Link href="/contacts/new">
-          <Button>Add New Contact</Button>
+          <Button className="flex items-center gap-2">
+            <Plus className="w-4 h-4" />
+            Add Contact
+          </Button>
         </Link>
       </div>
 
-      {isFetching && (
-        <p className="text-sm text-gray-500 mb-2">Refreshing data...</p>
+      {isFetching && !isLoading && (
+        <p className="text-sm text-gray-500 mb-2">Refreshing contacts...</p>
       )}
 
-      {contacts.length === 0 && !isLoading && !isFetching ? (
-        <p className="text-center text-gray-600">No contacts found.</p>
+      {contacts.length === 0 ? (
+        <div className="text-center text-gray-500 mt-10">
+          No contacts found. Try adjusting your search or add a new contact.
+        </div>
       ) : (
-        <div className="border rounded-md overflow-hidden">
+        <div className="overflow-auto rounded-md border">
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 z-10">
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
@@ -141,32 +140,23 @@ const ContactsPage = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {contacts.map((contact: any) => (
+              {contacts.map((contact: Contact) => (
                 <TableRow key={contact.ID}>
                   <TableCell className="font-medium">
                     {contact.NAME} {contact.LAST_NAME}
                   </TableCell>
-                  <TableCell>
-                    {contact.EMAIL && contact.EMAIL.length > 0
-                      ? contact.EMAIL[0].VALUE
-                      : "N/A"}
-                  </TableCell>
-                  <TableCell>
-                    {contact.PHONE && contact.PHONE.length > 0
-                      ? contact.PHONE[0].VALUE
-                      : "N/A"}
-                  </TableCell>
-                  <TableCell>{contact.ADDRESS_CITY || "N/A"}</TableCell>
-                  <TableCell className="text-right flex justify-end space-x-2">
+                  <TableCell>{contact.EMAIL?.[0]?.VALUE || "—"}</TableCell>
+                  <TableCell>{contact.PHONE?.[0]?.VALUE || "—"}</TableCell>
+                  <TableCell>{contact.ADDRESS_CITY || "—"}</TableCell>
+                  <TableCell className="text-right space-x-2 flex justify-end">
                     <Link href={`/contacts/${contact.ID}`}>
-                      <Button variant="outline" size="sm">
-                        View
+                      <Button variant="ghost" size="icon">
+                        <Eye className="w-4 h-4" />
                       </Button>
                     </Link>
-                    {/* NEW ADDITION: Edit button */}
                     <Link href={`/contacts/edit/${contact.ID}`}>
-                      <Button variant="outline" size="sm">
-                        Edit
+                      <Button variant="ghost" size="icon">
+                        <Pencil className="w-4 h-4" />
                       </Button>
                     </Link>
                   </TableCell>
@@ -177,22 +167,22 @@ const ContactsPage = () => {
         </div>
       )}
 
-      <div className="flex justify-between items-center mt-4">
+      <div className="flex flex-col sm:flex-row justify-between items-center gap-3 mt-6">
         <Button
           onClick={handlePrevPage}
-          disabled={page === 0 || isLoading || isFetching}
+          disabled={!pagination.canPrev || isLoading || isFetching}
+          variant="outline"
         >
           Previous
         </Button>
-        <span>
-          Page {page + 1} of {Math.ceil(totalContacts / limit)} ({totalContacts}{" "}
-          contacts)
+        <span className="text-sm text-gray-600">
+          Page {pagination.page + 1} of {pagination.totalPages} —{" "}
+          {totalContacts} contacts
         </span>
         <Button
           onClick={handleNextPage}
-          disabled={
-            (page + 1) * limit >= totalContacts || isLoading || isFetching
-          }
+          disabled={!pagination.canNext || isLoading || isFetching}
+          variant="outline"
         >
           Next
         </Button>

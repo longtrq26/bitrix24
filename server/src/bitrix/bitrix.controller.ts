@@ -75,7 +75,11 @@ export class BitrixController {
         throw new Error('Invalid install request parameters (GET).');
       }
 
-      res.status(HttpStatus.OK).send('App installed successfully!');
+      const redirectUrl = `${this.configService.get(
+        'CLIENT_BASE_URL',
+      )}?memberId=${memberId}`;
+
+      return res.redirect(redirectUrl);
     } catch (error) {
       this.logger.error(`Install GET error: ${error.message}`, error.stack);
       res

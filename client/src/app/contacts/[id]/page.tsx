@@ -13,29 +13,27 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DEFAULT_MEMBER_ID } from "@/lib/constants";
+import {
+  extractErrorMessage,
+  formatAddress,
+  formatMultiField,
+} from "@/lib/utils";
 import {
   useDeleteContactMutation,
   useGetContactDetailsQuery,
 } from "@/state/api";
-import { FetchBaseQueryError } from "@reduxjs/toolkit/query/react";
-import { SerializedError } from "@reduxjs/toolkit/react";
+import { Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 
-interface ContactDetailPageProps {
-  params: {
-    id: string; // The contact ID from the URL
-  };
-}
-
 const ContactDetailPage = () => {
-  const { id: contactId } = useParams<ContactDetailPageProps["params"]>();
+  const { id: contactId } = useParams<{ id: string }>();
   const router = useRouter();
-
-  // IMPORTANT: Replace with your actual memberId or implement a proper way to retrieve it
-  const memberId = "e3b04fcf454a94d025ceb96c93423068";
+  const memberId = DEFAULT_MEMBER_ID;
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   const {
     data: contact,
@@ -43,193 +41,184 @@ const ContactDetailPage = () => {
     isLoading,
   } = useGetContactDetailsQuery(
     { memberId, contactId },
-    { skip: !memberId || !contactId } // Skip fetching if memberId or contactId is not available
+    { skip: !memberId || !contactId }
   );
 
   const [deleteContact, { isLoading: isDeleting }] = useDeleteContactMutation();
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
+  const handleDelete = async () => {
+    try {
+      await deleteContact({ memberId, contactId }).unwrap();
+      toast(`Contact ${contactId} has been successfully deleted.`);
+      router.push("/contacts");
+    } catch (err: any) {
+      toast(`Error deleting contact: ${err.data?.message || err.message}`);
+      console.error("Failed to delete contact:", err);
+    } finally {
+      setShowDeleteDialog(false);
+    }
+  };
 
   if (!memberId || !contactId) {
     return (
-      <div className="container mx-auto p-4">
-        <p>Loading contact ID...</p>
+      <div className="container mx-auto p-6">
+        <p className="text-muted-foreground">Loading contact information...</p>
       </div>
     );
   }
 
   if (isLoading) {
     return (
-      <div className="container mx-auto p-4">
-        <h1 className="text-2xl font-bold mb-4">Contact Details</h1>
-        <p>Loading contact details...</p>
+      <div className="container mx-auto p-6">
+        <h1 className="text-2xl font-semibold mb-4">Contact Details</h1>
+        <div className="flex items-center space-x-2">
+          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+          <p>Fetching contact...</p>
+        </div>
       </div>
     );
   }
 
   if (error) {
-    let errorMessage = "An unknown error occurred";
-
-    if ("status" in error) {
-      // FetchBaseQueryError
-      const fetchError = error as FetchBaseQueryError;
-      if (typeof fetchError.data === "string") {
-        errorMessage = fetchError.data;
-      } else if (
-        typeof fetchError.data === "object" &&
-        fetchError.data !== null &&
-        "message" in fetchError.data
-      ) {
-        errorMessage =
-          (fetchError.data as { message?: string }).message || errorMessage;
-      }
-    } else if ("message" in error) {
-      // SerializedError
-      errorMessage = (error as SerializedError).message || errorMessage;
-    }
-
+    const errorMessage = extractErrorMessage(error);
     return (
-      <div className="container mx-auto p-4">
-        <h1 className="text-2xl font-bold mb-4">Contact Details</h1>
-        <p className="text-red-500">
-          Error loading contact details: {errorMessage}
+      <div className="container mx-auto p-6">
+        <h1 className="text-2xl font-semibold mb-4">Contact Details</h1>
+        <p className="text-destructive font-medium">
+          Error loading contact: {errorMessage}
         </p>
-        <Button onClick={() => router.back()}>Go Back</Button>
+        <Button
+          variant="outline"
+          onClick={() => router.back()}
+          className="mt-4"
+        >
+          ← Go Back
+        </Button>
       </div>
     );
   }
 
   if (!contact) {
     return (
-      <div className="container mx-auto p-4">
-        <h1 className="text-2xl font-bold mb-4">Contact Not Found</h1>
-        <p>The contact with ID {contactId} could not be found.</p>
-        <Button onClick={() => router.back()}>Go Back</Button>
+      <div className="container mx-auto p-6">
+        <h1 className="text-2xl font-semibold mb-4">Contact Not Found</h1>
+        <p className="text-muted-foreground">
+          The contact with ID <span className="font-mono">{contactId}</span>{" "}
+          does not exist.
+        </p>
+        <Button
+          variant="outline"
+          onClick={() => router.back()}
+          className="mt-4"
+        >
+          ← Go Back
+        </Button>
       </div>
     );
   }
 
-  const handleDelete = async () => {
-    try {
-      await deleteContact({ memberId, contactId }).unwrap();
-      toast(`Contact ${contactId} has been successfully deleted.`);
-      router.push("/contacts"); // Redirect back to the contact list
-    } catch (err: any) {
-      toast(`Error deleting contact: ${err.data?.message || err.message}`);
-      console.error("Failed to delete contact:", err);
-    } finally {
-      setShowDeleteDialog(false); // Close dialog
-    }
-  };
-
   return (
-    <div className="container mx-auto p-4">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold">
-          {contact.NAME} {contact.LAST_NAME}
-        </h1>
+    <div className="container mx-auto px-4 py-8 space-y-6">
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-3xl font-bold">
+            {contact.NAME} {contact.LAST_NAME}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            View and manage contact information.
+          </p>
+        </div>
         <Link href="/contacts">
-          <Button variant="outline">Back to Contacts</Button>
+          <Button variant="ghost">← Back to Contacts</Button>
         </Link>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Contact Details Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Basic Information</CardTitle>
+            <CardTitle>Basic Info</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2">
+          <CardContent className="space-y-2 text-sm">
             <p>
-              <strong>Name:</strong> {contact.NAME} {contact.LAST_NAME}
-            </p>
-            {contact.SECOND_NAME && (
-              <p>
-                <strong>Middle Name:</strong> {contact.SECOND_NAME}
-              </p>
-            )}
-            <p>
-              <strong>Phone:</strong>{" "}
-              {contact.PHONE && contact.PHONE.length > 0
-                ? contact.PHONE[0].VALUE
-                : "N/A"}
+              <span className="font-medium">Name:</span> {contact.NAME}{" "}
+              {contact.LAST_NAME}
             </p>
             <p>
-              <strong>Email:</strong>{" "}
-              {contact.EMAIL && contact.EMAIL.length > 0
-                ? contact.EMAIL[0].VALUE
-                : "N/A"}
+              <span className="font-medium">Phone:</span>{" "}
+              {formatMultiField(contact.PHONE)}
             </p>
             <p>
-              <strong>Website:</strong>{" "}
-              {contact.WEB && contact.WEB.length > 0
-                ? contact.WEB[0].VALUE
-                : "N/A"}
+              <span className="font-medium">Email:</span>{" "}
+              {formatMultiField(contact.EMAIL)}
             </p>
             <p>
-              <strong>Address:</strong>{" "}
-              {contact.ADDRESS_CITY ||
-              contact.ADDRESS_REGION ||
-              contact.ADDRESS_PROVINCE
-                ? `${contact.ADDRESS_CITY || ""}${
-                    contact.ADDRESS_CITY &&
-                    (contact.ADDRESS_REGION || contact.ADDRESS_PROVINCE)
-                      ? ", "
-                      : ""
-                  }${contact.ADDRESS_REGION || ""}${
-                    contact.ADDRESS_REGION && contact.ADDRESS_PROVINCE
-                      ? ", "
-                      : ""
-                  }${contact.ADDRESS_PROVINCE || ""}`.trim()
-                : "N/A"}
+              <span className="font-medium">Website:</span>{" "}
+              {formatMultiField(contact.WEB)}
+            </p>
+            <p>
+              <span className="font-medium">Address:</span>{" "}
+              {formatAddress(
+                contact.ADDRESS_CITY,
+                contact.ADDRESS_REGION,
+                contact.ADDRESS_PROVINCE
+              )}
             </p>
           </CardContent>
         </Card>
 
-        {/* Banking Requisite Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Bank Details</CardTitle>
+            <CardTitle>Banking Details</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2">
+          <CardContent className="space-y-2 text-sm">
             {contact.requisite ? (
               <>
                 <p>
-                  <strong>Requisite Name:</strong>{" "}
-                  {contact.requisite.NAME || "N/A"}
+                  <span className="font-medium">Account Name:</span>{" "}
+                  {contact.requisite.NAME || "—"}
                 </p>
                 <p>
-                  <strong>Bank Name:</strong>{" "}
-                  {contact.requisite.RQ_BANK_NAME || "N/A"}
+                  <span className="font-medium">Bank:</span>{" "}
+                  {contact.requisite.RQ_BANK_NAME || "—"}
                 </p>
                 <p>
-                  <strong>Account Number:</strong>{" "}
-                  {contact.requisite.RQ_ACC_NUM || "N/A"}
+                  <span className="font-medium">Account #:</span>{" "}
+                  {contact.requisite.RQ_ACC_NUM || "—"}
                 </p>
               </>
             ) : (
-              <p>No bank details available for this contact.</p>
+              <p className="text-muted-foreground">
+                No banking info available.
+              </p>
             )}
           </CardContent>
         </Card>
       </div>
 
-      {/* NEW ADDITION: Edit and Delete Buttons */}
-      <div className="mt-6 flex justify-end space-x-2">
+      <div className="flex justify-end gap-2 pt-4">
         <Link href={`/contacts/edit/${contactId}`}>
-          <Button>Edit Contact</Button>
+          <Button>Edit</Button>
         </Link>
+
         <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
           <AlertDialogTrigger asChild>
             <Button variant="destructive" disabled={isDeleting}>
-              {isDeleting ? "Deleting..." : "Delete Contact"}
+              {isDeleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  Deleting...
+                </>
+              ) : (
+                "Delete"
+              )}
             </Button>
           </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+              <AlertDialogTitle>Delete this contact?</AlertDialogTitle>
               <AlertDialogDescription>
-                This action cannot be undone. This will permanently delete the
-                contact from Bitrix24 and remove their data from our servers.
+                This action is irreversible. The contact and all related data
+                will be permanently removed.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -237,7 +226,7 @@ const ContactDetailPage = () => {
                 Cancel
               </AlertDialogCancel>
               <AlertDialogAction onClick={handleDelete} disabled={isDeleting}>
-                {isDeleting ? "Deleting..." : "Continue"}
+                {isDeleting ? "Deleting..." : "Confirm"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
