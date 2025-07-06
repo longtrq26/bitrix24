@@ -329,7 +329,7 @@ export class BitrixService {
   // Lấy chi tiết một contact
   async getContactDetails(memberId: string, contactId: string): Promise<any> {
     try {
-      // Call api
+      // Lấy thông tin contact
       const contactResponse = await this.callBitrixApi(
         memberId,
         'crm.contact.get',
@@ -358,17 +358,12 @@ export class BitrixService {
 
       let requisiteDetails: Partial<CreateRequisiteDto> | null = null;
 
-      // Tìm requisite đúng preset ngân hàng
-      if (
-        requisitesListResponse.result &&
-        requisitesListResponse.result.length > 0
-      ) {
+      // Tìm requisite đúng preset
+      if (Array.isArray(requisitesListResponse.result)) {
         const bankRequisiteSummary = requisitesListResponse.result.find(
-          // 5 = preset cho bank
-          (req: any) => req.PRESET_ID === BANK_REQUISITE_PRESET_ID,
+          (req: any) => Number(req.PRESET_ID) === BANK_REQUISITE_PRESET_ID,
         );
 
-        // Nếu có requisite đúng preset, call api để lấy details
         if (bankRequisiteSummary) {
           const fullRequisiteResponse = await this.callBitrixApi(
             memberId,
@@ -376,20 +371,26 @@ export class BitrixService {
             { ID: bankRequisiteSummary.ID },
           );
 
-          if (fullRequisiteResponse.result) {
+          const result = fullRequisiteResponse.result;
+
+          if (result) {
             requisiteDetails = {
-              NAME: fullRequisiteResponse.result.NAME,
-              RQ_BANK_NAME: fullRequisiteResponse.result.RQ_BANK_NAME,
-              RQ_ACC_NUM: fullRequisiteResponse.result.RQ_ACC_NUM,
+              NAME: result.NAME,
+              ...(result.RQ_BANK_NAME && { RQ_BANK_NAME: result.RQ_BANK_NAME }),
+              ...(result.RQ_ACC_NUM && { RQ_ACC_NUM: result.RQ_ACC_NUM }),
             };
           }
         }
       }
 
-      return { ...contact, requisite: requisiteDetails };
+      return {
+        ...contact,
+        requisite: requisiteDetails,
+      };
     } catch (error) {
       this.logger.error(
         `Failed to get contact details for ID ${contactId}: ${error.message}`,
+        error.stack,
       );
       throw error;
     }
@@ -455,8 +456,14 @@ export class BitrixService {
           ENTITY_ID: contactId,
           PRESET_ID: BANK_REQUISITE_PRESET_ID,
           NAME: requisite.NAME || 'Bank Details',
-          ...requisite,
         };
+
+        if (requisite.RQ_BANK_NAME) {
+          (requisiteFields as any).RQ_BANK_NAME = requisite.RQ_BANK_NAME;
+        }
+        if (requisite.RQ_ACC_NUM) {
+          (requisiteFields as any).RQ_ACC_NUM = requisite.RQ_ACC_NUM;
+        }
 
         // Gắn requisite vào contact
         const requisiteResponse = await this.callBitrixApi(
